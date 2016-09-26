@@ -1,5 +1,5 @@
 # coding=utf-8
-# 모든 원본 데이터는 딕셔너리의 리스트 형태로 있다고 가정한다.
+# I assume all original data is list of dict
 REQUIRED_INFORMATION = ['name', 'birthday', 'address', 'sex']
 
 # input collected data
@@ -28,30 +28,56 @@ def mergeable(to_content, from_content):
     return to_content == from_content
 
 
-def inner_join(total_data, additional_data):
+def merge(content1, content2):
+    return content1
+
+
+# warning: total_data might be destroyed. use returned data.
+def join(total_data, additional_data):
     result_set = []
     # additional_data.person_list X total_data.person_list
     for additional_table_row in additional_data:
         matching_rows = []
-        for total_data_row in total_data:
+        for matching_total_data_row in total_data:
             # addtional_data.person.columns X total_data.person.columns
             for column_name in additional_table_row:
-                if column_name in total_data_row:
-                    # addtional의 컬럼이 total에 존재
-                    if mergeable(total_data_row[column_name], additional_table_row[column_name]):
-                        total_data_row[column_name] = merge(total_data_row[column_name], additional_data[column_name])
+                if column_name in matching_total_data_row:
+                    # addtional's column exists in total
+                    if mergeable(matching_total_data_row[column_name], additional_table_row[column_name]):
+                        matching_total_data_row[column_name] = merge(matching_total_data_row[column_name],
+                                                                     additional_data[column_name])
                     else:
                         break
                 else:
-                    # addtional의 컬럼이 total에 존재 안 함
+                    # addtional;s column does not exists in total
                     continue
             else:
-                # 모든 컬럼을 병합 가능 -> 두 row를 조인할 수 있음
-                matching_rows.append(total_data_row)
-        for total_data_row in matching_rows:
-            merged_row = total_data_row
-            for column_name in total_data_row:
-                
+                # all columns are mergeable -> these rows are join-able.
+                matching_rows.append(matching_total_data_row)
+
+        # join additional's and totals's row
+        if matching_rows:
+            # mark as already matched to perform outer join
+            additional_table_row[('has matched',)] = True
+            for matching_total_data_row in matching_rows:
+                # mark as already matched to perform outer join
+                matching_total_data_row[('has matched',)] = True
+                joined_row = matching_total_data_row[:]
+                for column_name, content in additional_table_row.iteritems():
+                    if column_name not in matching_total_data_row:
+                        joined_row[column_name] = content
+                result_set.append(joined_row)
+
+    # append not joined rows
+    for additional_table_row in additional_data:
+        if ('has matched',) in additional_table_row:
+            result_set.append(additional_table_row)
+
+    for total_data_row in total_data:
+        if ('has matched',) in total_data_row:
+            result_set.append(total_data_row)
+
+    return result_set
 
 
 def main():
@@ -59,7 +85,7 @@ def main():
     total_data = sensitive_medical_table
 
     for table in data_tables:
-        total_data = inner_join(total_data, table)
+        total_data = join(total_data, table)
         if all(field in total_data.fileds for field in REQUIRED_INFORMATION):
             break
 
