@@ -32,8 +32,13 @@ def merge(content1, content2):
     return content1
 
 
-# warning: total_data might be destroyed. use returned data.
 def join(total_data, additional_data):
+    """
+    maked joined table of total_data and additional_data.
+    :param total_data: list of dict of {str: (str or DeidentifiedContent)}
+    :param additional_data: list of dict of {str: (str or DeidentifiedContent)}
+    :return: joined table of total_data and additional_data
+    """
     result_set = []
     # additional_data.person_list X total_data.person_list
     for additional_table_row in additional_data:
@@ -70,12 +75,16 @@ def join(total_data, additional_data):
 
     # append not joined rows
     for additional_table_row in additional_data:
-        if ('has matched',) in additional_table_row:
+        if ('has matched',) not in additional_table_row:
             result_set.append(additional_table_row)
+        else:
+            del additional_table_row[('has matched',)]
 
     for total_data_row in total_data:
-        if ('has matched',) in total_data_row:
+        if ('has matched',) not in total_data_row:
             result_set.append(total_data_row)
+        else:
+            del total_data_row[('has matched',)]
 
     return result_set
 
