@@ -27,12 +27,20 @@ class DeidentifiedContent(object):
 
 
 class MaskedContent(DeidentifiedContent):
-    def __init__(self, content, valid, align='left'):
+    def __init__(self, content, valid=None, align='left', masking_char='*'):
         assert isinstance(content, str)
-        assert isinstance(valid, (list, tuple))
         super().__init__('masking', content)
         self.content = content
-        self.valid = valid
+        if valid is not None:
+            self.valid = valid
+        else:
+            valid = []
+            for char in content:
+                if char == masking_char:
+                    valid.append(False)
+                else:
+                    valid.append(True)
+            self.valid = tuple(valid)
         self.align = align
 
     def mergeable(self, other):
@@ -237,13 +245,9 @@ def main():
     sensitive_medical_table = get_dataset_from_csv('bob_medical.csv')
     for row in sensitive_medical_table:
         row['이름'] = MaskedContent(row['이름'], (True, False, False), align='left')
-        row['전화번호'] = MaskedContent(row['전화번호'],
-                                    (False, False, False, False, False, False, False, False, False,
-                                     True, True, True, True),
+        row['전화번호'] = MaskedContent(row['전화번호'], '***-****-0000',
                                     align='left')
-        row['생년월일'] = MaskedContent(row['생년월일'],
-                                    (True, True, True, True, False, False, False, False),
-                                    align='left')
+        row['생년월일'] = MaskedContent(row['생년월일'], '****0000', align='left')
 
     facebook_data = get_dataset_from_sqlite_narrow_table('facebook.db', 'fb', 'url', 'key', 'value')
 
@@ -253,7 +257,7 @@ def main():
     total_data = join(sensitive_medical_table, facebook_data, equivalent_values)
     # print(total_data)
     # search
-    found_rows = find(total_data, {'이름': '이제형', '학력': 'Hanyang University, ERICA - 한양대학교 ERICA'})
+    found_rows = find(total_data, {'학교': '검정고시'})
     for row in found_rows:
         print(row)
 
