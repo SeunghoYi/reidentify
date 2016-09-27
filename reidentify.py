@@ -1,6 +1,7 @@
 # I assume all original data is list of dict
 import sqlite3
 import csv
+import re
 from copy import deepcopy
 from collections import defaultdict
 from itertools import zip_longest
@@ -76,13 +77,11 @@ class MaskedContent(DeidentifiedContent):
 
 
 def mergeable(to_content, from_content, string_equivalence=None):
+    if string_equivalence is None:
+        string_equivalence = lambda string1, string2: string1 == string2
+
     if isinstance(to_content, (str, bytes)) and isinstance(from_content, (str, bytes)):
-        if to_content == from_content:
-            return True
-        if string_equivalence:
-            if string_equivalence[to_content] == string_equivalence[from_content]:
-                return True
-        return False
+        return string_equivalence(to_content, from_content)
     elif isinstance(to_content, DeidentifiedContent) and isinstance(from_content, (DeidentifiedContent, str)):
         return to_content.mergeable(from_content)
     elif isinstance(from_content, DeidentifiedContent) and isinstance(to_content, str):
@@ -97,20 +96,28 @@ def mergeable(to_content, from_content, string_equivalence=None):
 
 
 def merge(content1, content2, string_equivalence=None):
-    if isinstance(content1, (str, bytes)):
-        return content1
-    elif isinstance(content2, (str, bytes)):
-        if content2 in string_equivalence:
-            return string_equivalence[content2][0]
-        return content2
+    if string_equivalence is None:
+        string_equivalence = lambda string1, string2: string1 == string2
+
+    if isinstance(content1, (str, bytes)) and isinstance(content2, (str, bytes)):
+        if string_equivalence(content1, content2):
+            return content1
+        else:
+            return {content1, content2}
+    elif isinstance(content1, DeidentifiedContent) and isinstance(content2, (str, bytes)):
+        if mergeable(content1, content2, string_equivalence):
+            return content2
+    elif isinstance(content1, (str, bytes)) and isinstance(content2, DeidentifiedContent):
+        if mergeable(content1, content2, string_equivalence):
+            return content1
     elif isinstance(content1, DeidentifiedContent) and isinstance(content2, DeidentifiedContent):
         raise NotImplementedError()
     elif isinstance(content1, (list, tuple, set)) and isinstance(content2, (str, bytes, DeidentifiedContent)):
         result_set = set()
         content2_not_merged = True
         for content1_item in content1:
-            if content2_not_merged and mergeable(content1_item, content2):
-                result_set.add(merge(content1_item, content2))
+            if content2_not_merged and mergeable(content1_item, content2, string_equivalence):
+                result_set.add(merge(content1_item, content2, string_equivalence))
                 content2_not_merged = False
             else:
                 result_set.add(content1_item)
@@ -121,8 +128,8 @@ def merge(content1, content2, string_equivalence=None):
         result_set = set()
         content1_not_merged = True
         for content2_item in content2:
-            if content1_not_merged and mergeable(content2_item, content1):
-                result_set.add(merge(content2_item, content1))
+            if content1_not_merged and mergeable(content1, content2_item, string_equivalence):
+                result_set.add(merge(content1, content2_item, string_equivalence))
                 content1_not_merged = False
             else:
                 result_set.add(content2_item)
@@ -132,27 +139,23 @@ def merge(content1, content2, string_equivalence=None):
     elif isinstance(content1, (list, tuple, set)) and isinstance(content2, (list, tuple, set)):
         result_set = set(content1)
         for content2_item in content2:
-            result_set |= merge(result_set, content2_item)  # duplicate operation exists. may be enhanced.
+            # duplicate operation exists. may be enhanced.
+            result_set |= merge(result_set, content2_item, string_equivalence)
 
         return result_set
 
     raise TypeError()
 
 
-def join(total_data, additional_data, equivalent_values=None):
+def join(total_data, additional_data, equality_functions=None):
     """
     maked joined table of total_data and additional_data.
+    :param equality_functions: equality_functions[column_name] = function(string1, string2): is string is equivalence?
     :param total_data: list of dict of {str: (str or DeidentifiedContent)}
     :param additional_data: list of dict of {str: (str or DeidentifiedContent)}
     :return: joined table of total_data and additional_data
     """
-    equivalent_value = defaultdict(dict)
-    if equivalent_values is not None:
-        for column, value_pairs in equivalent_values.items():
-            for value1, value2 in value_pairs:
-                equivalent_value[column][value1] = (value1, value2)
-                equivalent_value[column][value2] = (value1, value2)
-
+    equality_functions = defaultdict(lambda: None, equality_functions)
     result_set = []
     # additional_data.person_list X total_data.person_list
     for additional_table_row in additional_data:
@@ -163,10 +166,10 @@ def join(total_data, additional_data, equivalent_values=None):
                 if column_name in matching_total_data_row:
                     # addtional's column exists in total
                     if not mergeable(matching_total_data_row[column_name], additional_table_row[column_name],
-                                     equivalent_value[column_name]):
+                                     equality_functions[column_name]):
                         break
                 else:
-                    # addtional;s column does not exists in total
+                    # addtional's column does not exists in total
                     continue
             else:
                 # all columns are mergeable -> these rows are join-able.
@@ -176,10 +179,16 @@ def join(total_data, additional_data, equivalent_values=None):
         if matching_rows:
             for matching_total_data_row in matching_rows:
                 joined_row = deepcopy(matching_total_data_row)
+                if ('has matched',) in joined_row:
+                    del joined_row[('has matched',)]
                 for column_name, content in additional_table_row.items():
+                    if column_name == ('has matched',):
+                        continue
+
                     if column_name in matching_total_data_row:
                         joined_row[column_name] = merge(matching_total_data_row[column_name],
-                                                        additional_table_row[column_name])
+                                                        additional_table_row[column_name],
+                                                        equality_functions[column_name])
                     else:
                         joined_row[column_name] = content
                 result_set.append(joined_row)
@@ -244,22 +253,54 @@ def main():
     # cross
     sensitive_medical_table = get_dataset_from_csv('bob_medical.csv')
     for row in sensitive_medical_table:
-        row['이름'] = MaskedContent(row['이름'], (True, False, False), align='left')
-        row['전화번호'] = MaskedContent(row['전화번호'], '***-****-0000',
-                                    align='left')
-        row['생년월일'] = MaskedContent(row['생년월일'], '****0000', align='left')
+        row['이름'] = MaskedContent(row['이름'], align='left')
+        row['전화번호'] = MaskedContent(row['전화번호'], align='left')
+        row['생년월일'] = MaskedContent(row['생년월일'], align='left')
 
     facebook_data = get_dataset_from_sqlite_narrow_table('facebook.db', 'fb', 'url', 'key', 'value')
+    for row in facebook_data:
+        if '휴대폰' in row:
+            try:
+                row['전화번호'] |= row.pop('휴대폰')
+            except KeyError:
+                row['전화번호'] = set(row.pop('휴대폰'))
+        if '기타 전화번호' in row:
+            try:
+                row['전화번호'] |= row.pop('기타 전화번호')
+            except KeyError:
+                row['전화번호'] = set(row.pop('기타 전화번호'))
+        if '학력' in row:
+            try:
+                row['학교'] |= row.pop('학력')
+            except KeyError:
+                row['학교'] = set(row.pop('학력'))
 
-    equivalent_values = dict()
-    equivalent_values['성별'] = {('F', '여성'), ('M', '남성')}
+    equility_functions = dict()
 
-    total_data = join(sensitive_medical_table, facebook_data, equivalent_values)
+    def gender_equal(value1, value2):
+        if value1 in ('F', '여성') and value2 in ('F', '여성'):
+            return True
+        if value1 in ('M', '남성') and value2 in ('M', '남성'):
+            return True
+        return False
+
+    def school_equal(school1, school2):
+        school1_stripped = ''.join(re.findall(r'[a-zA-Z0-9ㄱ-ㅎㅏ-ㅣ가-힣]+', school1.lower()))
+        school2_stripped = ''.join(re.findall(r'[a-zA-Z0-9ㄱ-ㅎㅏ-ㅣ가-힣]+', school2.lower()))
+        return school1_stripped in school2_stripped or school2_stripped in school1_stripped
+
+    equility_functions['성별'] = gender_equal
+    equility_functions['학교'] = school_equal
+
+    total_data = join(sensitive_medical_table, facebook_data, equility_functions)
     # print(total_data)
     # search
-    found_rows = find(total_data, {'학교': '검정고시'})
-    for row in found_rows:
-        print(row)
+    found_rows = find(total_data, {'이름': {'현성원'}}, )
+    for index, row in enumerate(found_rows, start=1):
+        print('#{}'.format(index))
+        for key, values in row.items():
+            print('{}: {}'.format(key, values))
+        print()
 
         #
         # - or -
