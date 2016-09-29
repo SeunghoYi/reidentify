@@ -316,8 +316,8 @@ def main():
     #
 
     # print all
-    unique_persons = unique(total_data, where=('name', 'birthday', 'address', 'sex'))
-    print_data(unique_persons)
+    # unique_persons = unique(total_data, where=('name', 'birthday', 'address', 'sex'))
+    # print_data(unique_persons)
 
 
 if __name__ == '__main__':
