@@ -1,4 +1,3 @@
-# I assume all original data is list of dict
 import sqlite3
 import csv
 import re
@@ -249,6 +248,18 @@ def find(data_set, query_dict):
     return result_set
 
 
+def unique():
+    return {v['id']:v for v in L}.values()
+
+
+def print_data(list_of_dict):
+    for index, row in enumerate(list_of_dict, start=1):
+        print('#{}'.format(index))
+        for key, values in row.items():
+            print('{}: {}'.format(key, values))
+        print()
+
+
 def main():
     # cross
     sensitive_medical_table = get_dataset_from_csv('bob_medical.csv')
@@ -256,6 +267,8 @@ def main():
         row['이름'] = MaskedContent(row['이름'], align='left')
         row['전화번호'] = MaskedContent(row['전화번호'], align='left')
         row['생년월일'] = MaskedContent(row['생년월일'], align='left')
+        if row['학교'] == '검정고시':
+            del row['학교']
 
     facebook_data = get_dataset_from_sqlite_narrow_table('facebook.db', 'fb', 'url', 'key', 'value')
     for row in facebook_data:
@@ -293,23 +306,18 @@ def main():
     equility_functions['학교'] = school_equal
 
     total_data = join(sensitive_medical_table, facebook_data, equility_functions)
-    # print(total_data)
+
     # search
-    found_rows = find(total_data, {'이름': {'현성원'}}, )
-    for index, row in enumerate(found_rows, start=1):
-        print('#{}'.format(index))
-        for key, values in row.items():
-            print('{}: {}'.format(key, values))
-        print()
+    found_rows = find(total_data, {'url': 'https://www.facebook.com/huna3869/about?'})
+    print_data(found_rows)
 
-        #
-        # - or -
-        #
+    #
+    # - or -
+    #
 
-        # # print all
-        # unique_persons = unique(total_data, where=('name', 'birthday', 'address', 'sex'))
-        # for row in unique_persons:
-        #     print(row['name'], row['birthday'], row['address'], row['sex'], row['illness'])
+    # print all
+    unique_persons = unique(total_data, where=('name', 'birthday', 'address', 'sex'))
+    print_data(unique_persons)
 
 
 if __name__ == '__main__':
