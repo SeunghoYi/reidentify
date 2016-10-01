@@ -75,10 +75,12 @@ class MaskedContent(DeidentifiedContent):
             raise NotImplementedError
 
 
-# class DatasetRecord(dict):
-#     def __init__(self, **kwargs):
-#         super().__init__(**kwargs)
-#         self.merged_datasets
+class DatasetRecord(dict):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.joined_from = ()
+        self.joined_common_attributes = set()
+        self.has_matched = False
 
 
 def mergeable(to_content, from_content, string_equivalence=None):
@@ -154,72 +156,77 @@ def merge(content1, content2, string_equivalence=None):
     raise TypeError()
 
 
-def join(total_data, additional_data, equality_functions=None):
+def join(total_dataset, additional_dataset, equality_functions=None):
     """
-    make joined table of total_data and additional_data.
-    :param equality_functions: equality_functions[attribute_name] = function(string1, string2): is string is equivalence?
-    :param total_data: list of dict of {str: (str or DeidentifiedContent)}
-    :param additional_data: list of dict of {str: (str or DeidentifiedContent)}
-    :return: joined table of total_data and additional_data
+    total_dataset과 addtional_dataset을 조인한 데이터셋을 만든다.
+    :param equality_functions: equality_functions[attribute_name] = function(string1, string2): 두 문자열이 동등한지의 여부
+    :param total_dataset: DatasetRecord 객체의 리스트
+    :param additional_dataset: list of DatasetRecord obejct 객체의 리스트
+    :return: total_dataset과 additional_dataset을 조인해 만든 데이터셋
     """
     equality_functions = defaultdict(lambda: None, equality_functions)
     result_set = []
-    # additional_data.record_list X total_data.record_list
-    for additional_table_record in additional_data:
+    # additional_dataset 레코드들 X total_dataset 레코드들
+    for additional_table_record in additional_dataset:
+        assert isinstance(additional_table_record, DatasetRecord)
         matching_records = []
-        for matching_total_data_record in total_data:
-            # addtional_data.record.attributes X total_data.record.attributes
+        for total_data_record in total_dataset:
+            assert isinstance(total_data_record, DatasetRecord)
+
+            # addtional_dataset.레코드[i].속성들 X total_dataset.레코드[j].속성들
             for attribute_name in additional_table_record:
-                if attribute_name in matching_total_data_record:
-                    # addtional's attribute exists in total
-                    if not mergeable(matching_total_data_record[attribute_name], additional_table_record[attribute_name],
-                                     equality_functions[attribute_name]):
+                if attribute_name in total_data_record:
+                    # addtional 쪽의 속성이 total 쪽에도 존재하는 경우
+                    if not mergeable(total_data_record[attribute_name],
+                                     additional_table_record[attribute_name], equality_functions[attribute_name]):
                         break
                 else:
-                    # addtional's attribute does not exists in total
+                    # addtional 쪽의 속성이 total 쪽에도 존재하는 경우
                     continue
             else:
-                # all attributes are mergeable -> these records are join-able.
-                matching_records.append(matching_total_data_record)
+                # 모든 속성이 mergeable -> 이 두 레코드는 조인 가능함
+                matching_records.append(total_data_record)
 
-        # join additional's and totals's record
+        # additional의 레코드와 totals의 레코드들을 조인
         if matching_records:
             attribute_intersection = set()
-            for matching_total_data_record in matching_records:
-                joined_record = deepcopy(matching_total_data_record)
-                if ('has matched',) in joined_record:
-                    del joined_record[('has matched',)]
+            for total_data_record in matching_records:
+                assert isinstance(total_data_record, DatasetRecord)
+                joined_record = deepcopy(total_data_record)
+                assert isinstance(joined_record, DatasetRecord)
+                if joined_record.has_matched:
+                    joined_record.has_matched = False
                 for attribute_name, content in additional_table_record.items():
-                    if attribute_name == ('has matched',):
-                        continue
-
-                    if attribute_name in matching_total_data_record:
-                        joined_record[attribute_name] = merge(matching_total_data_record[attribute_name],
-                                                           additional_table_record[attribute_name],
-                                                           equality_functions[attribute_name])
+                    if attribute_name in total_data_record:
+                        joined_record[attribute_name] = merge(total_data_record[attribute_name],
+                                                              additional_table_record[attribute_name],
+                                                              equality_functions[attribute_name])
                         attribute_intersection.add(attribute_name)
                     else:
                         joined_record[attribute_name] = content
-                joined_record[('attribute intersection',)] = attribute_intersection
+                joined_record.joined_common_attributes = attribute_intersection
                 result_set.append(joined_record)
-                # mark as already matched to perform outer join
-                matching_total_data_record[('has matched',)] = True
+                # 아우터 조인에 사용하기 위해 이미 매칭된 컬럼으로 표시
+                total_data_record.has_matched = True
+                joined_record.joined_from = (total_dataset, additional_dataset)
 
-            # mark as already matched to perform outer join
-            additional_table_record[('has matched',)] = True
+            # 아우터 조인에 사용하기 위해 이미 매칭된 컬럼으로 표시
+            additional_table_record.has_matched = True
 
     # 조인되지 않은 레코드
-    for additional_table_record in additional_data:
-        if ('has matched',) not in additional_table_record:
+    for additional_table_record in additional_dataset:
+        assert isinstance(additional_table_record, DatasetRecord)
+        if not additional_table_record.has_matched:
             result_set.append(additional_table_record)
         else:
-            del additional_table_record[('has matched',)]
+            additional_table_record.has_matched = False
 
-    for total_data_record in total_data:
-        if ('has matched',) not in total_data_record:
+    for total_data_record in total_dataset:
+        assert isinstance(total_data_record, DatasetRecord)
+        if not total_data_record.has_matched:
             result_set.append(total_data_record)
         else:
-            del total_data_record[('has matched',)]
+            total_data_record.has_matched = False
 
     return result_set
 
@@ -227,9 +234,10 @@ def join(total_data, additional_data, equality_functions=None):
 def get_dataset_from_sqlite_narrecord_table(file_name, table_name, id_attribute='id', key_attribute='key',
                                             value_attribute='value'):
     cursor = sqlite3.connect(file_name).cursor()
-    cursor.execute('SELECT {id}, {key}, {value} FROM {table}'.format(id=id_attribute, key=key_attribute, value=value_attribute,
-                                                                     table=table_name))
-    data_set = defaultdict(dict)
+    cursor.execute(
+        'SELECT {id}, {key}, {value} FROM {table}'.format(id=id_attribute, key=key_attribute, value=value_attribute,
+                                                          table=table_name))
+    data_set = defaultdict(DatasetRecord)
     for record_id, key, value in cursor.fetchall():
         try:
             data_set[record_id][key].add(value)
@@ -240,8 +248,10 @@ def get_dataset_from_sqlite_narrecord_table(file_name, table_name, id_attribute=
 
 
 def get_dataset_from_csv(file_name):
+    data_set = []
     with open(file_name, encoding='utf-8') as f:
-        data_set = list(csv.DictReader(f))
+        for record in csv.DictReader(f):
+            data_set.append(DatasetRecord(**record))
     return data_set
 
 
@@ -257,7 +267,7 @@ def find(data_set, query_dict):
         else:
             result_set.append(data_record)
     result_set.sort(reverse=True,
-                    key=lambda x: len(x[('attribute intersection',)]) if ('attribute intersection',) in x else 0)
+                    key=lambda x: len(x.joined_common_attributes))
     return result_set
 
 
@@ -268,14 +278,6 @@ def unique():
 def print_data(list_of_dict):
     for index, record in enumerate(list_of_dict, start=1):
         print('#{}'.format(index))
-        for key, values in record.items():
-            print('{}: {}'.format(key, values))
-        print()
-
-
-def print_comparison(data_set1, data_set2, joined_data_set):
-    for index, record in enumerate(data_set1, start=1):
-        print('[{}]'.format(index))
         for key, values in record.items():
             print('{}: {}'.format(key, values))
         print()
@@ -330,7 +332,7 @@ def main():
     # print_data(total_data)
 
     # search
-    # found_records = find(total_data, {'이름': '이수림'})
+    found_records = find(total_data, {'이름': '이수림'})
     found_records = find(total_data, {
         '이름': MaskedContent('정**'),
         '성별': 'M',
