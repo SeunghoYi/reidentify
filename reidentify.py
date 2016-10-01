@@ -75,9 +75,16 @@ class MaskedContent(DeidentifiedContent):
             raise NotImplementedError
 
 
+# class DatasetRecord(dict):
+#     def __init__(self, **kwargs):
+#         super().__init__(**kwargs)
+#         self.merged_datasets
+
+
 def mergeable(to_content, from_content, string_equivalence=None):
     if string_equivalence is None:
-        string_equivalence = lambda string1, string2: string1 == string2
+        def string_equivalence(string1, string2):
+            return string1 == string2
 
     if isinstance(to_content, (str, bytes)) and isinstance(from_content, (str, bytes)):
         return string_equivalence(to_content, from_content)
@@ -96,7 +103,8 @@ def mergeable(to_content, from_content, string_equivalence=None):
 
 def merge(content1, content2, string_equivalence=None):
     if string_equivalence is None:
-        string_equivalence = lambda string1, string2: string1 == string2
+        def string_equivalence(string1, string2):
+            return string1 == string2
 
     if isinstance(content1, (str, bytes)) and isinstance(content2, (str, bytes)):
         if string_equivalence(content1, content2):
@@ -148,81 +156,85 @@ def merge(content1, content2, string_equivalence=None):
 
 def join(total_data, additional_data, equality_functions=None):
     """
-    maked joined table of total_data and additional_data.
-    :param equality_functions: equality_functions[column_name] = function(string1, string2): is string is equivalence?
+    make joined table of total_data and additional_data.
+    :param equality_functions: equality_functions[attribute_name] = function(string1, string2): is string is equivalence?
     :param total_data: list of dict of {str: (str or DeidentifiedContent)}
     :param additional_data: list of dict of {str: (str or DeidentifiedContent)}
     :return: joined table of total_data and additional_data
     """
     equality_functions = defaultdict(lambda: None, equality_functions)
     result_set = []
-    # additional_data.person_list X total_data.person_list
-    for additional_table_row in additional_data:
-        matching_rows = []
-        for matching_total_data_row in total_data:
-            # addtional_data.person.columns X total_data.person.columns
-            for column_name in additional_table_row:
-                if column_name in matching_total_data_row:
-                    # addtional's column exists in total
-                    if not mergeable(matching_total_data_row[column_name], additional_table_row[column_name],
-                                     equality_functions[column_name]):
+    # additional_data.record_list X total_data.record_list
+    for additional_table_record in additional_data:
+        matching_records = []
+        for matching_total_data_record in total_data:
+            # addtional_data.record.attributes X total_data.record.attributes
+            for attribute_name in additional_table_record:
+                if attribute_name in matching_total_data_record:
+                    # addtional's attribute exists in total
+                    if not mergeable(matching_total_data_record[attribute_name], additional_table_record[attribute_name],
+                                     equality_functions[attribute_name]):
                         break
                 else:
-                    # addtional's column does not exists in total
+                    # addtional's attribute does not exists in total
                     continue
             else:
-                # all columns are mergeable -> these rows are join-able.
-                matching_rows.append(matching_total_data_row)
+                # all attributes are mergeable -> these records are join-able.
+                matching_records.append(matching_total_data_record)
 
-        # join additional's and totals's row
-        if matching_rows:
-            for matching_total_data_row in matching_rows:
-                joined_row = deepcopy(matching_total_data_row)
-                if ('has matched',) in joined_row:
-                    del joined_row[('has matched',)]
-                for column_name, content in additional_table_row.items():
-                    if column_name == ('has matched',):
+        # join additional's and totals's record
+        if matching_records:
+            attribute_intersection = set()
+            for matching_total_data_record in matching_records:
+                joined_record = deepcopy(matching_total_data_record)
+                if ('has matched',) in joined_record:
+                    del joined_record[('has matched',)]
+                for attribute_name, content in additional_table_record.items():
+                    if attribute_name == ('has matched',):
                         continue
 
-                    if column_name in matching_total_data_row:
-                        joined_row[column_name] = merge(matching_total_data_row[column_name],
-                                                        additional_table_row[column_name],
-                                                        equality_functions[column_name])
+                    if attribute_name in matching_total_data_record:
+                        joined_record[attribute_name] = merge(matching_total_data_record[attribute_name],
+                                                           additional_table_record[attribute_name],
+                                                           equality_functions[attribute_name])
+                        attribute_intersection.add(attribute_name)
                     else:
-                        joined_row[column_name] = content
-                result_set.append(joined_row)
+                        joined_record[attribute_name] = content
+                joined_record[('attribute intersection',)] = attribute_intersection
+                result_set.append(joined_record)
                 # mark as already matched to perform outer join
-                matching_total_data_row[('has matched',)] = True
+                matching_total_data_record[('has matched',)] = True
 
             # mark as already matched to perform outer join
-            additional_table_row[('has matched',)] = True
+            additional_table_record[('has matched',)] = True
 
-    # append not joined rows
-    for additional_table_row in additional_data:
-        if ('has matched',) not in additional_table_row:
-            result_set.append(additional_table_row)
+    # 조인되지 않은 레코드
+    for additional_table_record in additional_data:
+        if ('has matched',) not in additional_table_record:
+            result_set.append(additional_table_record)
         else:
-            del additional_table_row[('has matched',)]
+            del additional_table_record[('has matched',)]
 
-    for total_data_row in total_data:
-        if ('has matched',) not in total_data_row:
-            result_set.append(total_data_row)
+    for total_data_record in total_data:
+        if ('has matched',) not in total_data_record:
+            result_set.append(total_data_record)
         else:
-            del total_data_row[('has matched',)]
+            del total_data_record[('has matched',)]
 
     return result_set
 
 
-def get_dataset_from_sqlite_narrow_table(file_name, table_name, id_column='id', key_column='key', value_column='value'):
+def get_dataset_from_sqlite_narrecord_table(file_name, table_name, id_attribute='id', key_attribute='key',
+                                            value_attribute='value'):
     cursor = sqlite3.connect(file_name).cursor()
-    cursor.execute('SELECT {id}, {key}, {value} FROM {table}'.format(id=id_column, key=key_column, value=value_column,
+    cursor.execute('SELECT {id}, {key}, {value} FROM {table}'.format(id=id_attribute, key=key_attribute, value=value_attribute,
                                                                      table=table_name))
     data_set = defaultdict(dict)
-    for row_id, key, value in cursor.fetchall():
+    for record_id, key, value in cursor.fetchall():
         try:
-            data_set[row_id][key].add(value)
+            data_set[record_id][key].add(value)
         except KeyError:
-            data_set[row_id][key] = {value}
+            data_set[record_id][key] = {value}
 
     return list(data_set.values())
 
@@ -235,27 +247,36 @@ def get_dataset_from_csv(file_name):
 
 def find(data_set, query_dict):
     result_set = []
-    for data_row in data_set:
-        for column_name, value in query_dict.items():
-            if column_name not in data_row:
+    for data_record in data_set:
+        for attribute_name, value in query_dict.items():
+            if attribute_name not in data_record:
                 break
 
-            if not mergeable(data_row[column_name], value):
+            if not mergeable(data_record[attribute_name], value):
                 break
         else:
-            result_set.append(data_row)
-
+            result_set.append(data_record)
+    result_set.sort(reverse=True,
+                    key=lambda x: len(x[('attribute intersection',)]) if ('attribute intersection',) in x else 0)
     return result_set
 
 
 def unique():
-    return {v['id']:v for v in L}.values()
+    return {v['id']: v for v in L}.values()
 
 
 def print_data(list_of_dict):
-    for index, row in enumerate(list_of_dict, start=1):
+    for index, record in enumerate(list_of_dict, start=1):
         print('#{}'.format(index))
-        for key, values in row.items():
+        for key, values in record.items():
+            print('{}: {}'.format(key, values))
+        print()
+
+
+def print_comparison(data_set1, data_set2, joined_data_set):
+    for index, record in enumerate(data_set1, start=1):
+        print('[{}]'.format(index))
+        for key, values in record.items():
             print('{}: {}'.format(key, values))
         print()
 
@@ -263,30 +284,30 @@ def print_data(list_of_dict):
 def main():
     # cross
     sensitive_medical_table = get_dataset_from_csv('bob_medical.csv')
-    for row in sensitive_medical_table:
-        row['이름'] = MaskedContent(row['이름'], align='left')
-        row['전화번호'] = MaskedContent(row['전화번호'], align='left')
-        row['생년월일'] = MaskedContent(row['생년월일'], align='left')
-        if row['학교'] == '검정고시':
-            del row['학교']
+    for record in sensitive_medical_table:
+        record['이름'] = MaskedContent(record['이름'], align='left')
+        record['전화번호'] = MaskedContent(record['전화번호'], align='left')
+        record['생년월일'] = MaskedContent(record['생년월일'], align='left')
+        if record['학교'] == '검정고시':
+            del record['학교']
 
-    facebook_data = get_dataset_from_sqlite_narrow_table('facebook.db', 'fb', 'url', 'key', 'value')
-    for row in facebook_data:
-        if '휴대폰' in row:
+    facebook_data = get_dataset_from_sqlite_narrecord_table('facebook.db', 'fb', 'url', 'key', 'value')
+    for record in facebook_data:
+        if '휴대폰' in record:
             try:
-                row['전화번호'] |= row.pop('휴대폰')
+                record['전화번호'] |= record.pop('휴대폰')
             except KeyError:
-                row['전화번호'] = set(row.pop('휴대폰'))
-        if '기타 전화번호' in row:
+                record['전화번호'] = set(record.pop('휴대폰'))
+        if '기타 전화번호' in record:
             try:
-                row['전화번호'] |= row.pop('기타 전화번호')
+                record['전화번호'] |= record.pop('기타 전화번호')
             except KeyError:
-                row['전화번호'] = set(row.pop('기타 전화번호'))
-        if '학력' in row:
+                record['전화번호'] = set(record.pop('기타 전화번호'))
+        if '학력' in record:
             try:
-                row['학교'] |= row.pop('학력')
+                record['학교'] |= record.pop('학력')
             except KeyError:
-                row['학교'] = set(row.pop('학력'))
+                record['학교'] = set(record.pop('학력'))
 
     equility_functions = dict()
 
@@ -306,10 +327,21 @@ def main():
     equility_functions['학교'] = school_equal
 
     total_data = join(sensitive_medical_table, facebook_data, equility_functions)
+    # print_data(total_data)
 
     # search
-    found_rows = find(total_data, {'url': 'https://www.facebook.com/huna3869/about?'})
-    print_data(found_rows)
+    # found_records = find(total_data, {'이름': '이수림'})
+    found_records = find(total_data, {
+        '이름': MaskedContent('정**'),
+        '성별': 'M',
+        '생년월일': MaskedContent('1995****'),
+        '전화번호': MaskedContent('***-****-0053'),
+        '트랙': '보안컨설팅',
+        '이메일': 'naver.com',
+        '학교': '대구가톨릭대학교',
+        '질병': '고혈압'
+    })
+    print_data(found_records)
 
     #
     # - or -
