@@ -167,18 +167,18 @@ def join(total_dataset, additional_dataset, equality_functions=None):
     equality_functions = defaultdict(lambda: None, equality_functions)
     result_set = []
     # additional_dataset 레코드들 X total_dataset 레코드들
-    for additional_table_record in additional_dataset:
-        assert isinstance(additional_table_record, DatasetRecord)
+    for additional_data_record in additional_dataset:
+        assert isinstance(additional_data_record, DatasetRecord)
         matching_records = []
         for total_data_record in total_dataset:
             assert isinstance(total_data_record, DatasetRecord)
 
             # addtional_dataset.레코드[i].속성들 X total_dataset.레코드[j].속성들
-            for attribute_name in additional_table_record:
+            for attribute_name in additional_data_record:
                 if attribute_name in total_data_record:
                     # addtional 쪽의 속성이 total 쪽에도 존재하는 경우
                     if not mergeable(total_data_record[attribute_name],
-                                     additional_table_record[attribute_name], equality_functions[attribute_name]):
+                                     additional_data_record[attribute_name], equality_functions[attribute_name]):
                         break
                 else:
                     # addtional 쪽의 속성이 total 쪽에도 존재하는 경우
@@ -189,19 +189,31 @@ def join(total_dataset, additional_dataset, equality_functions=None):
 
         # additional의 레코드와 totals의 레코드들을 조인
         if matching_records:
-            attribute_intersection = set()
+            print('*' + record_summary(additional_data_record, exclude_attribute=('url', '사진', '페이스북 커버 사진')))
             for total_data_record in matching_records:
+                attribute_intersection = set()
                 assert isinstance(total_data_record, DatasetRecord)
                 joined_record = deepcopy(total_data_record)
                 assert isinstance(joined_record, DatasetRecord)
                 if joined_record.has_matched:
                     joined_record.has_matched = False
-                for attribute_name, content in additional_table_record.items():
+                for attribute_name, content in additional_data_record.items():
                     if attribute_name in total_data_record:
                         joined_record[attribute_name] = merge(total_data_record[attribute_name],
-                                                              additional_table_record[attribute_name],
+                                                              additional_data_record[attribute_name],
                                                               equality_functions[attribute_name])
                         attribute_intersection.add(attribute_name)
+                        if isinstance(total_data_record[attribute_name], (str, DeidentifiedContent)):
+                            total_data_value = total_data_record[attribute_name]
+                        else:
+                            assert isinstance(total_data_record[attribute_name], set)
+                            total_data_value = ','.join(total_data_record[attribute_name])
+
+                        if isinstance(additional_data_record[attribute_name], (str, DeidentifiedContent)):
+                            additional_data_value = additional_data_record[attribute_name]
+                        else:
+                            assert isinstance(additional_data_record[attribute_name], set)
+                            additional_data_value = ','.join(additional_data_record[attribute_name])
                     else:
                         joined_record[attribute_name] = content
                 joined_record.joined_common_attributes = attribute_intersection
@@ -209,17 +221,21 @@ def join(total_dataset, additional_dataset, equality_functions=None):
                 # 아우터 조인에 사용하기 위해 이미 매칭된 컬럼으로 표시
                 total_data_record.has_matched = True
                 joined_record.joined_from = (total_dataset, additional_dataset)
+                # 출력
+                summary = record_summary(total_data_record, exclude_attribute=('url', '사진', '페이스북 커버 사진'))
+                print('  {} -> {}'.format(str(joined_record.joined_common_attributes), summary))
+            print()
 
             # 아우터 조인에 사용하기 위해 이미 매칭된 컬럼으로 표시
-            additional_table_record.has_matched = True
+            additional_data_record.has_matched = True
 
     # 조인되지 않은 레코드
-    for additional_table_record in additional_dataset:
-        assert isinstance(additional_table_record, DatasetRecord)
-        if not additional_table_record.has_matched:
-            result_set.append(additional_table_record)
+    for additional_data_record in additional_dataset:
+        assert isinstance(additional_data_record, DatasetRecord)
+        if not additional_data_record.has_matched:
+            result_set.append(additional_data_record)
         else:
-            additional_table_record.has_matched = False
+            additional_data_record.has_matched = False
 
     for total_data_record in total_dataset:
         assert isinstance(total_data_record, DatasetRecord)
@@ -271,15 +287,39 @@ def find(data_set, query_dict):
     return result_set
 
 
-def unique():
-    return {v['id']: v for v in L}.values()
+def elapsed_string(original_string):
+    if len(original_string) <= 15:
+        return original_string
+    return ''.join((original_string[:7], '...', original_string[7:][-7:]))
+
+
+def record_summary(record, exclude_attribute=()):
+    exclude_attribute = set(exclude_attribute)
+    summary = []
+    for attribute_name, attribute_value in record.items():
+        if attribute_name in exclude_attribute:
+            continue
+
+        attribute = attribute_name + ': '
+        if isinstance(attribute_value, set):
+            if len(attribute_value) == 1:
+                attribute += elapsed_string(str(next(iter(attribute_value))))
+            else:
+                attribute += '{' + ','.join(elapsed_string(item) for item in attribute_value) + '}'
+        else:
+            attribute += elapsed_string(str(attribute_value))
+        summary.append(attribute)
+
+    return ', '.join(summary)
 
 
 def print_data(list_of_dict):
     for index, record in enumerate(list_of_dict, start=1):
+        assert isinstance(record, DatasetRecord)
         print('#{}'.format(index))
         for key, values in record.items():
             print('{}: {}'.format(key, values))
+        print('공통 컬럼: {}'.format(record.joined_common_attributes))
         print()
 
 
@@ -332,7 +372,7 @@ def main():
     # print_data(total_data)
 
     # search
-    found_records = find(total_data, {'이름': '이수림'})
+    # found_records = find(total_data, {'이름': '이수림'})
     found_records = find(total_data, {
         '이름': MaskedContent('정**'),
         '성별': 'M',
