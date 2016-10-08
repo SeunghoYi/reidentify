@@ -7,13 +7,25 @@ from itertools import zip_longest
 
 
 class DeidentifiedContent(object):
-    def __init__(self, method, content):
+    """
+    일반 문자열에 대비해 비식별화된 문자열을 나타는 베이스 클래스
+    """
+    def __init__(self, method='masking', content=''):
+        """
+        :param method: str. 비식별화 방법. 현재 가능한 값: 'masking'
+        :param content: str. 비식별화 후의 문자열 값.
+        """
         assert isinstance(method, str)
         assert isinstance(content, str)
-        self.method = 'masking'
-        self.content = ''
+        self.method = method
+        self.content = content
 
     def mergeable(self, other):
+        """
+        다른 문자열 또는 DeidentifiedContent와 동일하다고 볼 수 있어 하나로 합칠 수 있는지의 여부를 확인.
+        :param other: str 또는 DeidentifiedContent.
+        :return: bool
+        """
         if isinstance(other, str):
             return self.content == other
         elif isinstance(other, DeidentifiedContent):
@@ -27,7 +39,17 @@ class DeidentifiedContent(object):
 
 
 class MaskedContent(DeidentifiedContent):
+    """
+    마스킹 처리된 내용
+    """
     def __init__(self, content, valid=None, align='left', masking_char='*'):
+        """
+        :param content: str. 마스킹 후의 문자열 값.
+        :param valid: list of bool. content와 동일한 인덱스의 값이 마스킹이 된 값인지를 나타냄.
+            마스킹이 되어 있으면 False. 되어 있지 않으면 True
+        :param align: 'left' or 'right'. 마스킹 처리시 문자열을 정렬한 기준.
+        :param masking_char: str. 마스킹 문자
+        """
         assert isinstance(content, str)
         super().__init__('masking', content)
         self.content = content
@@ -44,6 +66,11 @@ class MaskedContent(DeidentifiedContent):
         self.align = align
 
     def mergeable(self, other):
+        """
+        다른 문자열 또는 DeidentifiedContent와 동일하다고 볼 수 있어 하나로 합칠 수 있는지의 여부를 확인.
+        :param other: str 또는 DeidentifiedContent.
+        :return: bool
+        """
         if self.align == 'left':
             if isinstance(other, str):
                 for valid, char1, char2 in zip_longest(self.valid, self.content, other, fillvalue=None):
@@ -76,6 +103,9 @@ class MaskedContent(DeidentifiedContent):
 
 
 class DatasetRecord(dict):
+    """
+    빌트인 클래스 dict에서 상속. 키, 값 쌍을 가진 레코드를 나타낸다.
+    """
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.joined_from = ()
@@ -83,45 +113,70 @@ class DatasetRecord(dict):
         self.has_matched = False
 
 
-def mergeable(to_content, from_content, string_equivalence=None):
-    if string_equivalence is None:
-        def string_equivalence(string1, string2):
-            return string1 == string2
-
-    if isinstance(to_content, (str, bytes)) and isinstance(from_content, (str, bytes)):
-        return string_equivalence(to_content, from_content)
-    elif isinstance(to_content, DeidentifiedContent) and isinstance(from_content, (DeidentifiedContent, str)):
-        return to_content.mergeable(from_content)
-    elif isinstance(from_content, DeidentifiedContent) and isinstance(to_content, str):
-        return from_content.mergeable(to_content)
-    elif isinstance(to_content, (list, tuple, set)) and isinstance(from_content, (str, bytes, DeidentifiedContent)):
-        return any(mergeable(from_content, to_content_item, string_equivalence) for to_content_item in to_content)
-    elif isinstance(to_content, (str, bytes, DeidentifiedContent)) and isinstance(from_content, (list, tuple, set)):
-        return any(mergeable(to_content, from_content_item, string_equivalence) for from_content_item in from_content)
-    elif isinstance(to_content, (list, tuple, set)) and isinstance(from_content, (list, tuple, set)):
-        return any(mergeable(from_content, to_content_item, string_equivalence) for to_content_item in to_content)
-    raise TypeError()
-
-
-def merge(content1, content2, string_equivalence=None):
+def mergeable(content1, content2, string_equivalence=None):
+    """
+    재귀함수. 두 내용이 동등하다고 볼 수 있어 하나로 합칠 수 있는지의 여부를 확인.
+    :param content1: 비교할 첫 번째 문자열
+    :param content2: 비교할 두 번째 문자열
+    :param string_equivalence: 문자열 대 문자열 비교시 사용할 일치 여부 함수. 기본값은 문자열 상등(==)이다.
+    :return: bool
+    """
     if string_equivalence is None:
         def string_equivalence(string1, string2):
             return string1 == string2
 
     if isinstance(content1, (str, bytes)) and isinstance(content2, (str, bytes)):
+        # 문자열 vs 문자열
+        return string_equivalence(content1, content2)
+    elif isinstance(content1, DeidentifiedContent) and isinstance(content2, (DeidentifiedContent, str)):
+        # 비식별화 문자열 vs [비식별화] 문자열
+        return content1.mergeable(content2)
+    elif isinstance(content1, str) and isinstance(content2, DeidentifiedContent):
+        # 문자열 vs 비식별화 문자열
+        return content2.mergeable(content1)
+    elif isinstance(content1, (list, tuple, set)) and isinstance(content2, (str, bytes, DeidentifiedContent)):
+        # 다중 값 vs 단일 값
+        return any(mergeable(content2, to_content_item, string_equivalence) for to_content_item in content1)
+    elif isinstance(content1, (str, bytes, DeidentifiedContent)) and isinstance(content2, (list, tuple, set)):
+        # 단일 값 vs 다중 값
+        return any(mergeable(content1, from_content_item, string_equivalence) for from_content_item in content2)
+    elif isinstance(content1, (list, tuple, set)) and isinstance(content2, (list, tuple, set)):
+        # 다중 값 vs 다중 값
+        return any(mergeable(content2, to_content_item, string_equivalence) for to_content_item in content1)
+    raise TypeError()
+
+
+def merge(content1, content2, string_equivalence=None):
+    """
+    재귀함수. 동등한 두 내용을 합침.
+    :param content1: 합칠 첫 번째 문자열
+    :param content2: 합칠 두 번째 문자열
+    :param string_equivalence: 문자열 대 문자열 비교시 사용할 일치 여부 함수. 기본값은 문자열 상등(==)이다.
+    :return: 두 문자열의 정보를 합쳐 만들어진 문자열
+    """
+    if string_equivalence is None:
+        def string_equivalence(string1, string2):
+            return string1 == string2
+
+    if isinstance(content1, (str, bytes)) and isinstance(content2, (str, bytes)):
+        # 문자열 vs 문자열
         if string_equivalence(content1, content2):
             return content1
         else:
             return {content1, content2}
     elif isinstance(content1, DeidentifiedContent) and isinstance(content2, (str, bytes)):
+        # 비식별화 문자열 vs 문자열
         if mergeable(content1, content2, string_equivalence):
             return content2
     elif isinstance(content1, (str, bytes)) and isinstance(content2, DeidentifiedContent):
+        # 문자열 vs 비식별화 문자열
         if mergeable(content1, content2, string_equivalence):
             return content1
     elif isinstance(content1, DeidentifiedContent) and isinstance(content2, DeidentifiedContent):
+        # 비식별화 문자열 vs 비식별화 문자열
         raise NotImplementedError()
     elif isinstance(content1, (list, tuple, set)) and isinstance(content2, (str, bytes, DeidentifiedContent)):
+        # 다중 값 vs 단일 값
         result_set = set()
         content2_not_merged = True
         for content1_item in content1:
@@ -134,6 +189,7 @@ def merge(content1, content2, string_equivalence=None):
             result_set.add(content2)
         return result_set
     elif isinstance(content1, (str, bytes, DeidentifiedContent)) and isinstance(content2, (list, tuple, set)):
+        # 단일 값 vs 다중 값
         result_set = set()
         content1_not_merged = True
         for content2_item in content2:
@@ -146,6 +202,7 @@ def merge(content1, content2, string_equivalence=None):
             result_set.add(content1)
         return result_set
     elif isinstance(content1, (list, tuple, set)) and isinstance(content2, (list, tuple, set)):
+        # 다중 값 vs 다중 값
         result_set = set(content1)
         for content2_item in content2:
             # duplicate operation exists. may be enhanced.
@@ -249,6 +306,15 @@ def join(total_dataset, additional_dataset, equality_functions=None):
 
 def get_dataset_from_sqlite_narrecord_table(file_name, table_name, id_attribute='id', key_attribute='key',
                                             value_attribute='value'):
+    """
+    narrow table 형태로 되어 있는 sqlite 테이블을 불러옴.
+    :param file_name: sqlite 데이터베이스 파일 이름
+    :param table_name: 불러올 테이블 이름
+    :param id_attribute: ID로 사용되는 컬럼명
+    :param key_attribute: 속성명으로 사용되는 컬럼명명
+    :param value_attribute: 속성 값으로 사용되는 컬럼명
+    :return: DatasetRecord의 list형태로 되어 있는 데이터셋.
+    """
     cursor = sqlite3.connect(file_name).cursor()
     cursor.execute(
         'SELECT {id}, {key}, {value} FROM {table}'.format(id=id_attribute, key=key_attribute, value=value_attribute,
@@ -264,6 +330,11 @@ def get_dataset_from_sqlite_narrecord_table(file_name, table_name, id_attribute=
 
 
 def get_dataset_from_csv(file_name):
+    """
+    csv 파일로부터 데이터를 불러옴.
+    :param file_name: csv 파일 이름
+    :return: DatasetRecord의 list형태로 되어 있는 데이터셋.
+    """
     data_set = []
     with open(file_name, encoding='utf-8') as f:
         for record in csv.DictReader(f):
@@ -272,6 +343,12 @@ def get_dataset_from_csv(file_name):
 
 
 def find(data_set, query_dict):
+    """
+    data_set에서 query_dict와 조인 가능한 레코드를 반환
+    :param data_set: DataRecord의 list.
+    :param query_dict: dict.
+    :return: DataRecord의 list. 조인 가능한 모든 레코드의 리스트
+    """
     result_set = []
     for data_record in data_set:
         for attribute_name, value in query_dict.items():
@@ -287,10 +364,18 @@ def find(data_set, query_dict):
     return result_set
 
 
-def elapsed_string(original_string):
-    if len(original_string) <= 15:
+def collapsed_string(original_string, max_length=15, front_leaving=7, end_leaving=7):
+    """
+    너무 긴 문자열을 ...으로 줄임.
+    :param original_string: 원본 문자열
+    :param max_length: 문자열을 줄이지 않는 최대 길이
+    :param front_leaving: ...의 앞에 남길 길이
+    :param end_leaving: ...의 뒤에 남길 길이
+    :return:
+    """
+    if len(original_string) <= max_length:
         return original_string
-    return ''.join((original_string[:7], '...', original_string[7:][-7:]))
+    return ''.join((original_string[:front_leaving], '...', original_string[front_leaving:][-end_leaving:]))
 
 
 def record_summary(record, exclude_attribute=()):
@@ -303,11 +388,11 @@ def record_summary(record, exclude_attribute=()):
         attribute = attribute_name + ': '
         if isinstance(attribute_value, set):
             if len(attribute_value) == 1:
-                attribute += elapsed_string(str(next(iter(attribute_value))))
+                attribute += collapsed_string(str(next(iter(attribute_value))))
             else:
-                attribute += '{' + ','.join(elapsed_string(item) for item in attribute_value) + '}'
+                attribute += '{' + ','.join(collapsed_string(item) for item in attribute_value) + '}'
         else:
-            attribute += elapsed_string(str(attribute_value))
+            attribute += collapsed_string(str(attribute_value))
         summary.append(attribute)
 
     return ', '.join(summary)
